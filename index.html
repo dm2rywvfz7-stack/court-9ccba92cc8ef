@@ -349,7 +349,7 @@ ul { margin-bottom: 0; padding-left: 20px; color: #475569; line-height: 1.6; }
         <li>概率来自历史条件分布，不是保证结果。</li>
         <li>样本少于 50 的条件只作观察，不建议重注。</li>
         <li>Q4 同时看半场、Q3、前三节总分及三节分差；冲突时等盘。</li>
-        <li>男子每次计算同时输出大小分与分差：Q3预测第三节单节最终绝对分差，Q4预测终场绝对分差；不判断哪队领先。</li>
+        <li>男子每次计算同时输出大小分与分差；分差统一按“主队 − 客队”计算：正数为主队领先，负数为客队领先，0为打平。</li>
         <li>男子应先选固定池或球队；若不选，工具会明确标注使用男子全体回退样本。</li>
         <li>分区与球队倾向只作背景，实时节奏与盘口仍是主判断。</li>
       </ul>
@@ -527,7 +527,8 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
   function liveOnlyProjection(live) {
     return projectScore([], live);
   }
-  function projectFinalMargin(margins, currentGap, elapsed) {
+  function projectFinalMargin(margins, currentMargin, elapsed, opts = {}) {
+    const absoluteHistory = !!opts.absoluteHistory;
     const histAvg = avg(margins);
     const histMedian = quantile(margins, .5);
     let weightLive = 0;
@@ -540,40 +541,61 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
     } else if (elapsed > 480) {
       weightLive = Math.min(0.85, 0.65 + ((elapsed - 480) / 120) * 0.20);
     }
-    const pred = histAvg == null
-      ? currentGap
-      : histAvg * (1 - weightLive) + currentGap * weightLive;
-    return { pred, histAvg, histMedian, currentGap, weightLive };
+    let pred;
+    if (absoluteHistory) {
+      const magnitude = histAvg == null
+        ? Math.abs(currentMargin)
+        : histAvg * (1 - weightLive) + Math.abs(currentMargin) * weightLive;
+      pred = currentMargin === 0 ? 0 : Math.sign(currentMargin) * magnitude;
+    } else {
+      pred = histAvg == null
+        ? currentMargin
+        : histAvg * (1 - weightLive) + currentMargin * weightLive;
+    }
+    return { pred, histAvg, histMedian, currentMargin, weightLive, absoluteHistory };
   }
   function marginBand(value) {
     if (value == null) return "数据不足";
+    value = Math.abs(value);
     if (value <= 3) return "0–3 分";
     if (value <= 6) return "4–6 分";
     if (value <= 9) return "7–9 分";
     if (value <= 14) return "10–14 分";
     return "≥15 分";
   }
+  function signedFmt(value) {
+    if (value == null || !Number.isFinite(value)) return "—";
+    const rounded = Number(value.toFixed(1));
+    return `${rounded > 0 ? "+" : ""}${rounded}`;
+  }
+  function marginDirection(value) {
+    if (value == null || !Number.isFinite(value)) return "数据不足";
+    if (value > 0) return "主队领先";
+    if (value < 0) return "客队领先";
+    return "打平";
+  }
   function marginDecision(proj) {
     const band = marginBand(proj?.pred);
-    const cls = proj?.pred == null ? "skip" : proj.pred >= 10 ? "big" : proj.pred >= 4 ? "watch-big" : "skip";
-    return { cls, text: `分差：预计 ${fmt(proj?.pred)} 分｜${band}` };
+    const magnitude = Math.abs(proj?.pred ?? 0);
+    const cls = proj?.pred == null ? "skip" : magnitude >= 10 ? "big" : magnitude >= 4 ? "watch-big" : "skip";
+    return { cls, text: `分差：预计 ${signedFmt(proj?.pred)}｜${marginDirection(proj?.pred)}` };
   }
   function totalDecision(decision) {
     return { ...decision, text: decision.text.replace("综合结果：", "大小分：") };
   }
   function renderMarginProjection(label, margins, live, proj, opts = {}) {
-    const currentText = opts.currentText || `${live.liveA}:${live.liveB}，当前绝对分差 ${proj.currentGap}`;
+    const currentText = opts.currentText || `${live.liveA}:${live.liveB}，当前分差 ${signedFmt(proj.currentMargin)}（${marginDirection(proj.currentMargin)}）`;
     return `<div class="card"><h3>${label}分差计算结果</h3>
       <div class="kv">
         <b>当前比分状态</b><span>${currentText}；剩余 ${Math.floor(live.remaining / 60)}:${String(live.remaining % 60).padStart(2, "0")}</span>
-        <b>历史分差均值</b><span>${fmt(proj.histAvg)} 分</span>
-        <b>历史分差中位数</b><span>${fmt(proj.histMedian)} 分</span>
+        <b>历史分差均值</b><span>${proj.absoluteHistory ? `${fmt(proj.histAvg)} 分（绝对值）` : `${signedFmt(proj.histAvg)}（主队 − 客队）`}</span>
+        <b>历史分差中位数</b><span>${proj.absoluteHistory ? `${fmt(proj.histMedian)} 分（绝对值）` : `${signedFmt(proj.histMedian)}（主队 − 客队）`}</span>
         <b>实时比分权重</b><span>${(proj.weightLive * 100).toFixed(0)}%</span>
-        <b>预计最终绝对分差</b><span><span class="tag ${marginDecision(proj).cls}">${fmt(proj.pred)} 分｜${marginBand(proj.pred)}</span></span>
+        <b>预计最终分差</b><span><span class="tag ${marginDecision(proj).cls}">${signedFmt(proj.pred)}｜${marginDirection(proj.pred)}｜${marginBand(proj.pred)}</span></span>
       </div>
-      <p class="hint">预测的是两队最终分差的绝对值，只判断差距大小，不判断哪支球队领先；历史样本与总分模式使用同一筛选范围。</p>
+      <p class="hint">分差口径：主队得分 − 客队得分。正数表示主队领先，负数表示客队领先，0表示打平；历史样本与总分模式使用同一筛选范围。</p>
     </div>
-    <div class="card"><h3>${label}分差区间概率</h3>${marginDistTable(margins, { target: label })}</div>`;
+    <div class="card"><h3>${label}分差区间概率</h3>${marginDistTable(margins, { target: label, absoluteHistory: proj.absoluteHistory, currentMargin: proj.currentMargin, remaining: live.remaining })}</div>`;
   }
   function renderProjection(label, proj, live, line, opts = {}) {
     const base = opts.base || 0;
@@ -718,24 +740,54 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
   }
   function marginDistTable(margins, opts = {}) {
     const target = opts.target || "单节最终";
+    const absoluteHistory = !!opts.absoluteHistory;
     const bins = [
-      { label: "0–3", test: v => v <= 3 },
-      { label: "4–6", test: v => v >= 4 && v <= 6 },
-      { label: "7–9", test: v => v >= 7 && v <= 9 },
-      { label: "10–14", test: v => v >= 10 && v <= 14 },
-      { label: "≥15", test: v => v >= 15 },
+      { label: "≤-15（客队领先15+）", test: v => v <= -15 },
+      { label: "-14～-10（客队领先）", test: v => v >= -14 && v <= -10 },
+      { label: "-9～-7（客队领先）", test: v => v >= -9 && v <= -7 },
+      { label: "-6～-4（客队领先）", test: v => v >= -6 && v <= -4 },
+      { label: "-3～-1（客队领先）", test: v => v >= -3 && v <= -1 },
+      { label: "0（打平）", test: v => v === 0 },
+      { label: "+1～+3（主队领先）", test: v => v >= 1 && v <= 3 },
+      { label: "+4～+6（主队领先）", test: v => v >= 4 && v <= 6 },
+      { label: "+7～+9（主队领先）", test: v => v >= 7 && v <= 9 },
+      { label: "+10～+14（主队领先）", test: v => v >= 10 && v <= 14 },
+      { label: "≥+15（主队领先15+）", test: v => v >= 15 },
     ];
     const values = (margins || []).filter(Number.isFinite);
     const n = values.length;
     const median = quantile(values, .5);
-    const p80 = quantile(values, .8);
+    const p80 = quantile(values.map(Math.abs), .8);
+    let homeProb = null;
+    if (absoluteHistory && n) {
+      const rms = Math.sqrt(avg(values.map(v => v * v)) || 1);
+      const sigmaRemaining = Math.max(1.5, rms * Math.sqrt(Math.max(0, opts.remaining || 0) / 600));
+      const z = (opts.currentMargin || 0) / sigmaRemaining;
+      homeProb = 1 / (1 + Math.exp(-1.7 * z));
+    }
+    const probabilityFor = bin => {
+      if (!absoluteHistory) return n ? values.filter(bin.test).length / n : null;
+      if (!n) return null;
+      if (bin.test(0)) return values.filter(v => v === 0).length / n;
+      const positiveBin = bin.test(1) || bin.test(4) || bin.test(7) || bin.test(10) || bin.test(15);
+      const magnitudeShare = values.filter(v => bin.test(positiveBin ? Math.abs(v) : -Math.abs(v))).length / n;
+      return magnitudeShare * (positiveBin ? homeProb : 1 - homeProb);
+    };
     return `<div class="kv">
-      <b>分差口径</b><span>${target}两队得分之差的绝对值，不区分主客方向</span>
-      <b>样本摘要</b><span>${sampleWarn(n).replace(/^｜/, "")}｜中位数 ${fmt(median)}｜80% 分位 ${fmt(p80)}</span>
+      <b>分差口径</b><span>${target}主队得分 − 客队得分；正数主队领先，负数客队领先</span>
+      <b>样本摘要</b><span>${sampleWarn(n).replace(/^｜/, "")}｜${absoluteHistory ? `历史绝对分差中位数 ${fmt(median)}` : `历史带符号中位数 ${signedFmt(median)}`}｜绝对分差80%分位 ${fmt(p80)}</span>
+      ${homeProb == null ? "" : `<b>方向估计</b><span>主队领先 ${pct(homeProb)}｜客队领先 ${pct(1 - homeProb)}（结合当前分差与剩余时间）</span>`}
     </div>
-    <table><thead><tr><th>${target}绝对分差</th><th>历史样本占比</th></tr></thead><tbody>${
-      bins.map(bin => `<tr><td>${bin.label}</td><td>${pct(n ? values.filter(bin.test).length / n : null)}</td></tr>`).join("")
+    <table><thead><tr><th>${target}带符号分差</th><th>${absoluteHistory ? "估计概率" : "历史样本占比"}</th></tr></thead><tbody>${
+      bins.map(bin => `<tr><td>${bin.label}</td><td>${pct(probabilityFor(bin))}</td></tr>`).join("")
     }</tbody></table>`;
+  }
+  function signedFinalMargin(row) {
+    if (!row || !Number.isFinite(row.regm) || !Number.isFinite(row.m) || !Number.isFinite(row.p4m)) return null;
+    const magnitude = Math.abs(row.regm);
+    if (magnitude === 0) return 0;
+    const candidates = [magnitude, -magnitude].filter(v => Math.abs(v - row.m) === Math.abs(row.p4m));
+    return candidates.length === 1 ? candidates[0] : null;
   }
   function error(msg) {
     return `<div class="card"><span class="tag skip">${esc(msg)}</span></div>`;
@@ -1012,7 +1064,8 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
     const live = liveState("q3");
     const proj = projectScore(scores, live);
     const margins = comboRows.map(r => r.p3m).filter(Number.isFinite);
-    const marginProj = projectFinalMargin(margins, Math.abs(live.liveA - live.liveB), live.elapsed);
+    const currentMargin = live.liveA - live.liveB;
+    const marginProj = projectFinalMargin(margins, currentMargin, live.elapsed, { absoluteHistory: true });
     setSummary("q3Summary", totalDecision(summaryDecision(p, need, proj, q3Line)));
     setSummary("q3MarginSummary", marginDecision(marginProj));
     $("q3Result").innerHTML = `
@@ -1087,9 +1140,9 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
     const live = liveState("q4");
     const proj = projectScore(scores, live, openingQ4Line);
     const decision = liveOnlyDecision(proj, fullLine, current);
-    const margins = mergeScores(mainRows.map(r => r.regm), marginRows.map(r => r.regm)).filter(Number.isFinite);
-    const currentGap = Math.abs(margin + live.liveA - live.liveB);
-    const marginProj = projectFinalMargin(margins, currentGap, live.elapsed);
+    const margins = mergeScores(mainRows.map(signedFinalMargin), marginRows.map(signedFinalMargin)).filter(Number.isFinite);
+    const currentMargin = margin + live.liveA - live.liveB;
+    const marginProj = projectFinalMargin(margins, currentMargin, live.elapsed);
     setSummary("q4Summary", totalDecision(decision));
     setSummary("q4MarginSummary", marginDecision(marginProj));
     $("q4Result").innerHTML = `
@@ -1117,7 +1170,7 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
       <div class="card"><h3>动态时间预测</h3>${renderProjection("Q4", proj, live, fullLine, { base: current, targetLabel: "综合预测全场总分" })}</div>
       <div class="card"><h3>Q4总分综合分布</h3>${distTable(scores, l.cuts.q4)}</div>
       ${renderMarginProjection("终场", margins, live, marginProj, {
-        currentText: `三节后分差 ${margin >= 0 ? "+" : ""}${margin}；实时Q4 ${live.liveA}:${live.liveB}；当前全场绝对分差 ${currentGap}`,
+        currentText: `三节后分差 ${signedFmt(margin)}；实时Q4 ${live.liveA}:${live.liveB}；当前全场分差 ${signedFmt(currentMargin)}（${marginDirection(currentMargin)}）`,
       })}`;
   }
 
