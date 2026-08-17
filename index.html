@@ -636,6 +636,31 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
     const under = scores.filter(x => x <= cutoff).length / scores.length;
     return { under, over: 1 - under, n: scores.length };
   }
+  function lineCandidatesFromScores(scores) {
+    if (!scores?.length) return [];
+    const cuts = cutsFromScores(scores);
+    return [...new Set([cuts.c10 + .5, cuts.c33 + .5, cuts.c50 + .5, cuts.c67 + .5, cuts.c90 - .5])]
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+  }
+  function probabilityLinesFromScores(scores, need) {
+    let overMax = null, overProb = null, underMin = null, underProb = null;
+    for (const line of lineCandidatesFromScores(scores)) {
+      const p = probAt(scores, line);
+      if (!p) continue;
+      if (p.over >= need) { overMax = line; overProb = p.over; }
+      if (underMin == null && p.under >= need) { underMin = line; underProb = p.under; }
+    }
+    return { overMax, overProb, underMin, underProb };
+  }
+  function renderProbabilityLines(label, result, currentBase = 0) {
+    const overLine = result.overMax == null ? null : result.overMax + currentBase;
+    const underLine = result.underMin == null ? null : result.underMin + currentBase;
+    return `<div class="kv">
+      <b>${label}｜大分</b><span>总分线 ≤ ${lineFmt(overLine)} 时，历史大分概率 ${pct(result.overProb)}</span>
+      <b>${label}｜小分</b><span>总分线 ≥ ${lineFmt(underLine)} 时，历史小分概率 ${pct(result.underProb)}</span>
+    </div>`;
+  }
   function mergeScores(a, b) {
     const out = [];
     if (a?.length) out.push(...a);
@@ -1060,6 +1085,8 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
     const pHalf = probAt(halfScores, q3Line);
     const pStruct = probAt(structScores, q3Line);
     const p = probAt(scores, q3Line);
+    const probabilityWatch = probabilityLinesFromScores(scores, threshold());
+    const probabilityStrong = probabilityLinesFromScores(scores, hardThreshold());
     const ln = lean(p, need);
     const live = liveState("q3");
     const proj = projectScore(scores, live);
@@ -1069,6 +1096,11 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
     setSummary("q3Summary", totalDecision(summaryDecision(p, need, proj, q3Line)));
     setSummary("q3MarginSummary", marginDecision(marginProj));
     $("q3Result").innerHTML = `
+      <div class="card"><h3>历史概率对应Q3总分线</h3>
+        ${renderProbabilityLines(`观察${Math.round(threshold() * 100)}%`, probabilityWatch)}
+        ${renderProbabilityLines(`强信号${Math.round(hardThreshold() * 100)}%`, probabilityStrong)}
+        <p class="hint">这里只显示“总分线对应多少历史概率”，不包含按剩余时间和当前得分生成的实时条件。</p>
+      </div>
       <div class="card"><h3>大小分结果</h3>
         <div class="kv">
           <b>半场取样</b><span>${half}±${win} → ${hBucket} ${l.ranges.h1[hBucket]}（档位仅作参考）</span>
@@ -1137,6 +1169,8 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
     const pMain = probAt(mainScores, q4EquivalentLine);
     const pMargin = probAt(marginScores, q4EquivalentLine);
     const p = probAt(scores, q4EquivalentLine);
+    const probabilityWatch = probabilityLinesFromScores(scores, threshold());
+    const probabilityStrong = probabilityLinesFromScores(scores, hardThreshold());
     const live = liveState("q4");
     const proj = projectScore(scores, live, openingQ4Line);
     const decision = liveOnlyDecision(proj, fullLine, current);
@@ -1146,6 +1180,11 @@ window.IPBL_TOOL_DATA = {"dateStart":"2025-05-16","dateEnd":"2026-08-17 13:00","
     setSummary("q4Summary", totalDecision(decision));
     setSummary("q4MarginSummary", marginDecision(marginProj));
     $("q4Result").innerHTML = `
+      <div class="card"><h3>历史概率对应全场总分线</h3>
+        ${renderProbabilityLines(`观察${Math.round(threshold() * 100)}%`, probabilityWatch, current)}
+        ${renderProbabilityLines(`强信号${Math.round(hardThreshold() * 100)}%`, probabilityStrong, current)}
+        <p class="hint">这里只显示“全场总分线对应多少历史概率”，不包含按剩余时间和当前得分生成的实时条件。</p>
+      </div>
       <div class="card"><h3>历史大小分概率</h3>
         <div class="kv">
           <b>当前盘口历史概率</b><span>${lineFmt(fullLine)}：大 ${pct(p?.over)} / 小 ${pct(p?.under)} ${sampleWarn(scores.length)}</span>
